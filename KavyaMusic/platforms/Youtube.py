@@ -32,20 +32,20 @@ def _clean_api_hub_url(val):
 BETA_API_URL = _clean_api_hub_url(
     os.environ.get("BETA_API_URL")
     or getattr(config, "BETA_API_URL", "")
-    or "https://lily-api-hub-production.up.railway.app/v1"
+    or "http://13.127.161.159/v1"
 )
 BETA_API_KEY = (
     os.environ.get("BETA_API_KEY")
     or getattr(config, "BETA_API_KEY", "")
-    or "beta_test_Kut1_pr7Xe2XpKsG3ShKcKFI-uFsB2Iw1lTMJ9w7Z1w"
+    or "betaapi+mdistkhar107+2kfree+bf331b87961325cd4a6e3ed8"
 )
 
 # 2. Secondary API (Shruti)
 SHRUTI_API_URL = _clean_url(
-    os.environ.get("SHRUTI_API_URL") or getattr(config, "API_URL", "") or "https://api.shrutibots.in"
+    os.environ.get("SHRUTI_API_URL") or getattr(config, "API_URL", "") or ""
 )
 SHRUTI_API_KEY = (
-    os.environ.get("SHRUTI_API_KEY") or getattr(config, "API_KEY", "") or "ShrutiBots7Yo5iWyWiyQKME4mrS6r"
+    os.environ.get("SHRUTI_API_KEY") or getattr(config, "API_KEY", "") or ""
 )
 
 # Optional cookies.txt for the yt-dlp fallback (age/bot-check videos)
