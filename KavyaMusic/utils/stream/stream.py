@@ -77,7 +77,7 @@ async def stream(
             else:
                 if not forceplay: db[chat_id] = []
                 status = True if video else None
-                file_path, direct = await YouTube.download(vidid, mystic, video=status, videoid=True)
+                file_path, direct = await YouTube.download(vidid, mystic, video=status, videoid=True, title=title)
                 if not file_path or str(file_path) == "None": raise AssistantErr(_["play_14"])
                 
                 asyncio.create_task(safe_delete(mystic))
@@ -106,7 +106,7 @@ async def stream(
     elif streamtype == "youtube":
         link, vidid, title, duration_min, thumbnail = result["link"], result["vidid"], (result["title"]).title(), result["duration_min"], result["thumb"]
         status = True if video else None
-        file_path, direct = await YouTube.download(vidid, mystic, videoid=True, video=status)
+        file_path, direct = await YouTube.download(vidid, mystic, videoid=True, video=status, title=title)
         if not file_path or str(file_path) == "None": raise AssistantErr(_["play_14"])
         
         asyncio.create_task(safe_delete(mystic))

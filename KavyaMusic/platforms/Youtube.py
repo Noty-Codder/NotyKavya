@@ -59,16 +59,20 @@ def time_to_seconds(time_str):
     return sum(int(x) * 60 ** i for i, x in enumerate(reversed(stringt.split(":"))))
 
 def get_safe_filename(title: str, default_id: str) -> str:
-    if not title:
+    clean = re.sub(r'[\\/*?:"<>|]', "", str(title or "")).strip()
+    clean = re.sub(r'\s+', " ", clean)
+    if not clean or len(clean) < 2:
         return default_id
-    return re.sub(r'[\\/*?:"<>|]', "", title).strip()
+    return clean[:80]
 
 def extract_video_id(link: str) -> str:
-    link = str(link or "")
-    if "youtu.be/" in link:
-        return link.split("youtu.be/")[1].split("?")[0]
-    elif "v=" in link:
-        return link.split("v=")[1].split("&")[0]
+    link = str(link or "").strip()
+    # Match standard YouTube 11-char video ID anywhere in link or standalone
+    m = re.search(r'(?:v=|\/|be\/|embed\/|shorts\/|live\/|^)([a-zA-Z0-9_-]{11})(?:[?&/]|\\b|$)', link)
+    if m:
+        return m.group(1)
+    if "v=" in link:
+        return link.split("v=")[-1].split("&")[0].split("?")[0]
     return link
 
 # Helper for Safe Async Execution
@@ -84,10 +88,11 @@ async def beta_api_download(api_url: str, api_key: str, video_id: str, download_
         LOGGER.error("🔴 Beta API Hub URL or API Key is missing!")
         return None
 
+    video_id = extract_video_id(video_id)
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    filename = get_safe_filename(title, f"beta_{video_id}")
+    safe_title = get_safe_filename(title, "track")
     ext = "mp4" if download_type == "video" else "mp3"
-    file_path = os.path.join(DOWNLOAD_DIR, f"{filename}.{ext}")
+    file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}_{safe_title}.{ext}")
 
     lock = _DL_LOCKS.setdefault(file_path, asyncio.Lock())
     async with lock:
@@ -106,16 +111,20 @@ async def beta_api_download(api_url: str, api_key: str, video_id: str, download_
             candidates = [
                 ("/media/download", {"id": video_id, "type": "video", "format": "mp4"}),
                 ("/media/video", {"id": video_id, "quality": "720p"}),
+                ("/media/download", {"id": video_id, "type": "video", "format": "mp4", "quality": "360p"}),
             ]
         else:
             candidates = [
-                ("/media/download", {"id": video_id, "format": "mp3"}),
                 ("/media/audio", {"id": video_id, "format": "mp3", "bitrate": "320"}),
+                ("/media/download", {"id": video_id, "format": "mp3"}),
+                ("/media/audio", {"id": video_id, "format": "mp3", "bitrate": "192"}),
                 ("/media/audio", {"id": video_id, "format": "m4a"}),
+                ("/media/download", {"id": video_id, "format": "m4a"}),
             ]
 
-        timeout = aiohttp.ClientTimeout(total=600, connect=20)
-        async with aiohttp.ClientSession(headers=headers) as session:
+        timeout = aiohttp.ClientTimeout(total=600, connect=15)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
             for ep_path, params in candidates:
                 try:
                     url = f"{api_url}{ep_path}"
@@ -129,11 +138,8 @@ async def beta_api_download(api_url: str, api_key: str, video_id: str, download_
                                 os.replace(tmp_path, file_path)
                                 LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' from Beta API Hub ({ep_path})!")
                                 return file_path
-                        elif resp.status in (401, 403):
-                            LOGGER.error(f"🔴 Beta API auth error: HTTP {resp.status}")
-                            return None
                         else:
-                            LOGGER.warning(f"🟡 Beta API {ep_path} returned HTTP {resp.status}")
+                            LOGGER.warning(f"🟡 Beta API {ep_path} returned HTTP {resp.status} - trying next candidate...")
                 except Exception as e:
                     LOGGER.warning(f"Beta API download error on {ep_path}: {e}")
                 finally:
@@ -155,10 +161,11 @@ async def beta_api_search(query: str, limit: int = 1):
             "X-API-Key": BETA_API_KEY,
             "User-Agent": "KavyaMusic/1.0",
         }
-        async with aiohttp.ClientSession(headers=headers) as session:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
             async with session.get(
                 f"{BETA_API_URL}/media/search",
-                params={"query": query},
+                params={"query": query, "q": query, "limit": limit},
                 timeout=aiohttp.ClientTimeout(total=10, connect=5),
             ) as resp:
                 if resp.status == 200:
@@ -174,13 +181,15 @@ async def beta_api_info(video_id: str):
     """Fetch video metadata via Beta API Hub Gateway."""
     if not BETA_API_URL or not BETA_API_KEY:
         return None
+    video_id = extract_video_id(video_id)
     try:
         headers = {
             "Authorization": f"Bearer {BETA_API_KEY}",
             "X-API-Key": BETA_API_KEY,
             "User-Agent": "KavyaMusic/1.0",
         }
-        async with aiohttp.ClientSession(headers=headers) as session:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
             async with session.get(
                 f"{BETA_API_URL}/media/info",
                 params={"id": video_id},
@@ -198,10 +207,11 @@ async def external_api_download(api_url: str, api_key: str, video_id: str, downl
         LOGGER.error(f"🔴 {api_name} API URL or API Key is missing!")
         return None
 
+    video_id = extract_video_id(video_id)
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    filename = get_safe_filename(title, f"{api_name[:3]}_{video_id}")
+    safe_title = get_safe_filename(title, "track")
     ext = "mp4" if download_type == "video" else "mp3"
-    file_path = os.path.join(DOWNLOAD_DIR, f"{filename}.{ext}")
+    file_path = os.path.join(DOWNLOAD_DIR, f"{api_name[:3]}_{video_id}_{safe_title}.{ext}")
 
     # one download per file at a time (two users asking the same song used to corrupt the file)
     lock = _DL_LOCKS.setdefault(file_path, asyncio.Lock())
@@ -210,44 +220,54 @@ async def external_api_download(api_url: str, api_key: str, video_id: str, downl
             return file_path
 
         tmp_path = file_path + ".part"
-        for attempt in range(1, 3):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    params = {
-                        "url": video_id,
-                        "type": "audio" if download_type == "audio" else "video",
-                        "api_key": api_key,
-                    }
-                    async with session.get(
-                        f"{api_url}/download",
-                        params=params,
-                        timeout=aiohttp.ClientTimeout(total=600, connect=20),
-                    ) as resp:
-                        if resp.status != 200:
-                            LOGGER.error(f"🔴 {api_name} Error: Status {resp.status}")
-                            # 401/403/404 will not fix themselves - go straight to fallback
-                            if resp.status in (401, 403, 404, 429):
-                                return None
-                            await asyncio.sleep(1.5)
-                            continue
+        # Support fallback hosts for Shruti API
+        urls_to_try = [api_url]
+        if "shrutibots.site" in api_url and "https://api.shrutibots.in" not in urls_to_try:
+            urls_to_try.append("https://api.shrutibots.in")
+        elif "shrutibots.in" in api_url and "https://api.shrutibots.site" not in urls_to_try:
+            urls_to_try.append("https://api.shrutibots.site")
 
-                        with open(tmp_path, "wb") as f:
-                            async for chunk in resp.content.iter_chunked(131072):
-                                f.write(chunk)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            for base_url in urls_to_try:
+                for attempt in range(1, 3):
+                    try:
+                        params = {
+                            "url": video_id,
+                            "type": "audio" if download_type == "audio" else "video",
+                            "api_key": api_key,
+                        }
+                        async with session.get(
+                            f"{base_url}/download",
+                            params=params,
+                            timeout=aiohttp.ClientTimeout(total=600, connect=15),
+                        ) as resp:
+                            if resp.status != 200:
+                                LOGGER.error(f"🔴 {api_name} ({base_url}) Error: Status {resp.status}")
+                                if resp.status in (401, 403, 404, 429):
+                                    break
+                                await asyncio.sleep(1.0)
+                                continue
 
-                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 50000:
-                    os.replace(tmp_path, file_path)
-                    LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' from {api_name}!")
-                    return file_path
+                            with open(tmp_path, "wb") as f:
+                                async for chunk in resp.content.iter_chunked(131072):
+                                    f.write(chunk)
 
-                LOGGER.warning(f"🔴 {api_name} returned corrupted/empty file for '{title}'. Rejecting it.")
-            except Exception as e:
-                LOGGER.error(f"{api_name} Download Error: {e}")
-                await asyncio.sleep(1.5)
-            finally:
-                if os.path.exists(tmp_path):
-                    try: os.remove(tmp_path)
-                    except Exception: pass
+                        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 50000:
+                            os.replace(tmp_path, file_path)
+                            LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' from {api_name} ({base_url})!")
+                            return file_path
+
+                        LOGGER.warning(f"🔴 {api_name} returned corrupted/empty file for '{title}'. Rejecting it.")
+                    except Exception as e:
+                        LOGGER.error(f"{api_name} ({base_url}) Download Error: {e}")
+                        await asyncio.sleep(1.0)
+                    finally:
+                        if os.path.exists(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except Exception:
+                                pass
         return None
 
 
@@ -713,14 +733,24 @@ class YouTubeAPI:
         songaudio: Union[bool, str] = None, songvideo: Union[bool, str] = None, format_id: Union[bool, str] = None,
         title: Union[bool, str] = None,
     ) -> str:
-        if videoid: link = self.base + link
+        if videoid and not str(link).startswith("http"):
+            link = self.base + link
         try:
             file_title = title if isinstance(title, str) else None
 
             if video: downloaded_file = await download_video(link, title=file_title)
             else: downloaded_file = await download_song(link, title=file_title)
 
-            if downloaded_file: return downloaded_file, True
+            if downloaded_file:
+                return downloaded_file, True
+
+            # Direct stream URL fallback if file download failed
+            vid = extract_video_id(link)
+            if vid and len(vid) >= 5 and not video and BETA_API_URL and BETA_API_KEY:
+                stream_url = f"{BETA_API_URL}/media/audio?id={vid}&format=mp3&bitrate=192"
+                LOGGER.info(f"🟢 Direct stream URL fallback for '{vid}': {stream_url}")
+                return stream_url, False
+
             return None, False
         except Exception as e:
             LOGGER.error(f"Error in YouTubeAPI.download: {e}")
