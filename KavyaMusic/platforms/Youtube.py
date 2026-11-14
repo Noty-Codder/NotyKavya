@@ -304,17 +304,19 @@ async def ytdlp_download(video_id: str, download_type: str, title: str = None):
 async def _resolve_title(video_id: str, title: str = None):
     if title:
         return title
+    # 1. Try first from Beta API Hub
+    try:
+        info = await beta_api_info(video_id)
+        if info and info.get("metadata", {}).get("title"):
+            return info["metadata"]["title"]
+    except Exception:
+        pass
+    # 2. Secondary: VideosSearch
     try:
         search = VideosSearch(video_id, limit=1)
         res = await search.next()
         if res and res.get("result"):
             return res["result"][0]["title"]
-    except Exception:
-        pass
-    try:
-        info = await beta_api_info(video_id)
-        if info and info.get("metadata", {}).get("title"):
-            return info["metadata"]["title"]
     except Exception:
         pass
     return None
@@ -328,22 +330,24 @@ async def _download_media(link: str, title: str, kind: str):
 
     title = await _resolve_title(video_id, title)
 
-    # 1. Primary: Beta API Hub Gateway (Lily API Hub)
+    # 1. Try FIRST from Beta API Hub (Lily API Hub)
     if BETA_API_URL and BETA_API_KEY:
         try:
+            LOGGER.info(f"🔵 [1/3] Trying FIRST from Beta API Hub for '{title}' ({kind})...")
             result = await beta_api_download(BETA_API_URL, BETA_API_KEY, video_id, kind, title)
             if result:
                 return result
         except Exception as e:
-            LOGGER.warning(f"Beta API Hub failed for {kind} '{title}': {e}")
+            LOGGER.warning(f"🟡 Beta API Hub failed for {kind} '{title}': {e}")
 
-    # 2. Secondary: Shruti API
+    # 2. Try SECOND from Shruti API
+    LOGGER.info(f"🟡 [2/3] Trying SECOND from Shruti API for '{title}' ({kind})...")
     result = await external_api_download(SHRUTI_API_URL, SHRUTI_API_KEY, video_id, kind, title, "Shruti")
     if result:
         return result
 
     # 3. Fallback: yt-dlp
-    LOGGER.warning(f"🟡 External APIs failed for {kind} '{title}'. Trying yt-dlp fallback...")
+    LOGGER.warning(f"🟠 [3/3] External APIs failed for {kind} '{title}'. Trying yt-dlp fallback...")
     result = await ytdlp_download(video_id, kind, title)
     if result:
         LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' ({kind}) from yt-dlp fallback!")
@@ -395,21 +399,7 @@ class YouTubeAPI:
         if videoid: link = self.base + link
         if "&" in link: link = link.split("&")[0]
 
-        try:
-            results = VideosSearch(link, limit=1)
-            response = await results.next()
-            if response and response.get("result"):
-                for result in response["result"]:
-                    title = result["title"]
-                    duration_min = result["duration"]
-                    thumbnail = result["thumbnails"][0]["url"].split("?")[0]
-                    vidid = result["id"]
-                    duration_sec = int(time_to_seconds(duration_min)) if duration_min else 0
-                    return title, duration_min, duration_sec, thumbnail, vidid
-        except Exception:
-            pass
-
-        # Beta API Hub resolver fallback
+        # 1. Primary: Try first from Beta API Hub Gateway
         try:
             vid_id = extract_video_id(link)
             if vid_id and len(vid_id) >= 5 and ("youtube" in link or "youtu.be" in link or videoid):
@@ -435,8 +425,24 @@ class YouTubeAPI:
                     vidid = r0.get("id")
                     return title, duration_min, dur_sec, thumbnail, vidid
         except Exception as e:
-            LOGGER.warning(f"Beta API details fallback error: {e}")
+            LOGGER.warning(f"Beta API details error: {e}")
 
+        # 2. Secondary: VideosSearch
+        try:
+            results = VideosSearch(link, limit=1)
+            response = await results.next()
+            if response and response.get("result"):
+                for result in response["result"]:
+                    title = result["title"]
+                    duration_min = result["duration"]
+                    thumbnail = result["thumbnails"][0]["url"].split("?")[0]
+                    vidid = result["id"]
+                    duration_sec = int(time_to_seconds(duration_min)) if duration_min else 0
+                    return title, duration_min, duration_sec, thumbnail, vidid
+        except Exception:
+            pass
+
+        # 3. Fallback: yt-dlp
         try:
             ydl_opts = {
                 "quiet": True, 
@@ -465,6 +471,13 @@ class YouTubeAPI:
     async def title(self, link: str, videoid: Union[bool, str] = None):
         if videoid: link = self.base + link
         if "&" in link: link = link.split("&")[0]
+        vid_id = extract_video_id(link)
+        try:
+            info = await beta_api_info(vid_id)
+            if info and info.get("metadata", {}).get("title"):
+                return info["metadata"]["title"]
+        except Exception:
+            pass
         try:
             results = VideosSearch(link, limit=1)
             for result in (await results.next())["result"]:
@@ -475,6 +488,16 @@ class YouTubeAPI:
     async def duration(self, link: str, videoid: Union[bool, str] = None):
         if videoid: link = self.base + link
         if "&" in link: link = link.split("&")[0]
+        vid_id = extract_video_id(link)
+        try:
+            info = await beta_api_info(vid_id)
+            if info and info.get("source", {}).get("duration_seconds"):
+                dur_sec = int(info["source"]["duration_seconds"])
+                m, s = divmod(dur_sec, 60)
+                h, m = divmod(m, 60)
+                return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+        except Exception:
+            pass
         try:
             results = VideosSearch(link, limit=1)
             for result in (await results.next())["result"]:
@@ -486,6 +509,18 @@ class YouTubeAPI:
         vid_id_str = link if videoid else extract_video_id(link)
         if videoid: link = self.base + link
         if "&" in link: link = link.split("&")[0]
+
+        # 1. Primary: Try first from Beta API Hub
+        try:
+            info = await beta_api_info(vid_id_str)
+            if info and info.get("thumbnails") and len(info["thumbnails"]) > 0:
+                thumb_url = info["thumbnails"][0].get("url")
+                if thumb_url:
+                    return thumb_url
+        except Exception:
+            pass
+
+        # 2. Secondary: VideosSearch
         try:
             results = VideosSearch(link, limit=1)
             for result in (await results.next())["result"]:
@@ -526,22 +561,7 @@ class YouTubeAPI:
         if videoid: link = self.base + link
         if "&" in link: link = link.split("&")[0]
 
-        try:
-            results = VideosSearch(link, limit=1)
-            response = await results.next()
-            if response and response.get("result"):
-                result = response["result"][0]
-                return {
-                    "title": result["title"],
-                    "link": result["link"],
-                    "vidid": result["id"],
-                    "duration_min": result["duration"],
-                    "thumb": result["thumbnails"][0]["url"].split("?")[0],
-                }, result["id"]
-        except Exception:
-            pass
-
-        # Beta API Hub resolver fallback
+        # 1. Primary: Try first from Beta API Hub Gateway
         try:
             vid_id = extract_video_id(link)
             if vid_id and len(vid_id) >= 5 and ("youtube" in link or "youtu.be" in link or videoid):
@@ -575,8 +595,25 @@ class YouTubeAPI:
                         "thumb": r0.get("thumbnail") or f"https://img.youtube.com/vi/{vidid}/hqdefault.jpg",
                     }, vidid
         except Exception as e:
-            LOGGER.warning(f"Beta API track fallback error: {e}")
+            LOGGER.warning(f"Beta API track error: {e}")
 
+        # 2. Secondary: VideosSearch
+        try:
+            results = VideosSearch(link, limit=1)
+            response = await results.next()
+            if response and response.get("result"):
+                result = response["result"][0]
+                return {
+                    "title": result["title"],
+                    "link": result["link"],
+                    "vidid": result["id"],
+                    "duration_min": result["duration"],
+                    "thumb": result["thumbnails"][0]["url"].split("?")[0],
+                }, result["id"]
+        except Exception:
+            pass
+
+        # 3. Fallback: yt-dlp
         try:
             ydl_opts = {
                 "quiet": True, 
@@ -651,20 +688,25 @@ class YouTubeAPI:
         if videoid: link = self.base + link
         if "&" in link: link = link.split("&")[0]
 
+        # 1. Primary: Try first from Beta API Hub
+        try:
+            search_res = await beta_api_search(link, limit=10)
+            if search_res and len(search_res) > query_type:
+                item = search_res[query_type]
+                return item.get("title"), item.get("duration_string", "0:00"), item.get("thumbnail"), item.get("id")
+        except Exception:
+            pass
+
+        # 2. Secondary: VideosSearch
         try:
             a = VideosSearch(link, limit=10)
             result = (await a.next()).get("result")
             return result[query_type]["title"], result[query_type]["duration"], result[query_type]["thumbnails"][0]["url"].split("?")[0], result[query_type]["id"]
         except Exception:
-            try:
-                search_res = await beta_api_search(link, limit=10)
-                if search_res and len(search_res) > query_type:
-                    item = search_res[query_type]
-                    return item.get("title"), item.get("duration_string", "0:00"), item.get("thumbnail"), item.get("id")
-            except Exception:
-                pass
-            fallback_thumb = f"https://img.youtube.com/vi/{raw_vid_str}/hqdefault.jpg" if raw_vid_str and len(raw_vid_str) > 5 else "https://telegra.ph/file/2e3d368e77c449c287430.jpg"
-            return "Unknown Title", "0:00", fallback_thumb, "None"
+            pass
+
+        fallback_thumb = f"https://img.youtube.com/vi/{raw_vid_str}/hqdefault.jpg" if raw_vid_str and len(raw_vid_str) > 5 else "https://telegra.ph/file/2e3d368e77c449c287430.jpg"
+        return "Unknown Title", "0:00", fallback_thumb, "None"
 
     async def download(
         self, link: str, mystic, video: Union[bool, str] = None, videoid: Union[bool, str] = None,
