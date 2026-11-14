@@ -31,19 +31,23 @@ MONGO_DB_URI = getenv("MONGO_DB_URI")
 JIOSAAVN_API = getenv("JIOSAAVN_API", "https://saavn.me/search/songs?query=")
 
 # ----------------- API RACING CONFIGURATION -----------------
-# 1. Shruti API
+# 1. Beta API Hub Gateway (Lily API Hub - Primary High-Speed Media API)
+BETA_API_URL = getenv("BETA_API_URL", "https://lily-api-hub-production.up.railway.app/v1")
+BETA_API_KEY = getenv("BETA_API_KEY", "beta_test_Kut1_pr7Xe2XpKsG3ShKcKFI-uFsB2Iw1lTMJ9w7Z1w")
+
+# 2. Shruti API (Secondary Fallback)
 API_URL = getenv("API_URL", "https://api.shrutibots.site")
 API_KEY = getenv("API_KEY", "")
 
-# 2. Xbit API
+# 3. Xbit API
 YTPROXY_URL = getenv("YTPROXY_URL", "https://tgapi.xbitcode.com")
 YT_API_KEY = getenv("YT_API_KEY", "")
 
-# 3. Worker API
+# 4. Worker API
 WORKER_FALLBACK_API_URL = getenv("WORKER_FALLBACK_API_URL", "https://youtubenewapi.skybotsdeveloper.workers.dev")
 WORKER_FALLBACK_API_KEY = getenv("WORKER_FALLBACK_API_KEY", "")
 
-# 4. Inflex API
+# 5. Inflex API
 INFLEX_API_URL = getenv("INFLEX_API_URL", "https://teaminflex.xyz")
 INFLEX_API_KEY = getenv("INFLEX_API_KEY", "")
 

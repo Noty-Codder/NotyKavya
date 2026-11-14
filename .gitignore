@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!sample.env
+
+# Logs
+*.log
+log.txt

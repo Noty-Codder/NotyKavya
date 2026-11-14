@@ -68,6 +68,16 @@
       "description": "Hours between auto clean of thumbnails/downloads (report goes to LOGGER_ID).",
       "value": "2",
       "required": false
+    },
+    "BETA_API_URL": {
+      "description": "Beta API Hub Gateway base URL",
+      "value": "https://lily-api-hub-production.up.railway.app/v1",
+      "required": false
+    },
+    "BETA_API_KEY": {
+      "description": "Beta API Hub API Key",
+      "value": "beta_test_Kut1_pr7Xe2XpKsG3ShKcKFI-uFsB2Iw1lTMJ9w7Z1w",
+      "required": false
     }
   },
   "formation": {

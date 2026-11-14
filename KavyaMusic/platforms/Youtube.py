@@ -15,13 +15,32 @@ from youtubesearchpython.__future__ import VideosSearch, Playlist
 DOWNLOAD_DIR = "downloads"
 LOGGER = logging.getLogger("BETA BOT HUB | 👑 THE SHIV")
 
-# 🟢 Primary API (Shruti)
+# 🟢 API Configuration
 def _clean_url(val):
     val = str(val or "").strip()
     if val.lower().startswith("to "):          # old typo: " to https://..."
         val = val[3:].strip()
     return val.rstrip("/")
 
+def _clean_api_hub_url(val):
+    val = _clean_url(val)
+    if val and not val.endswith("/v1"):
+        val = f"{val}/v1"
+    return val
+
+# 1. Beta API Hub Gateway (Lily API Hub - Primary High-Speed Media API)
+BETA_API_URL = _clean_api_hub_url(
+    os.environ.get("BETA_API_URL")
+    or getattr(config, "BETA_API_URL", "")
+    or "https://lily-api-hub-production.up.railway.app/v1"
+)
+BETA_API_KEY = (
+    os.environ.get("BETA_API_KEY")
+    or getattr(config, "BETA_API_KEY", "")
+    or "beta_test_Kut1_pr7Xe2XpKsG3ShKcKFI-uFsB2Iw1lTMJ9w7Z1w"
+)
+
+# 2. Secondary API (Shruti)
 SHRUTI_API_URL = _clean_url(
     os.environ.get("SHRUTI_API_URL") or getattr(config, "API_URL", "") or "https://api.shrutibots.in"
 )
@@ -58,6 +77,121 @@ async def _async_run(func, *args, **kwargs):
     return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
 # ----------------- DOWNLOADERS -----------------
+
+async def beta_api_download(api_url: str, api_key: str, video_id: str, download_type: str, title: str = None) -> str:
+    """Download audio or video using Beta API Hub Gateway (Lily API Hub)."""
+    if not api_url or not api_key:
+        LOGGER.error("🔴 Beta API Hub URL or API Key is missing!")
+        return None
+
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    filename = get_safe_filename(title, f"beta_{video_id}")
+    ext = "mp4" if download_type == "video" else "mp3"
+    file_path = os.path.join(DOWNLOAD_DIR, f"{filename}.{ext}")
+
+    lock = _DL_LOCKS.setdefault(file_path, asyncio.Lock())
+    async with lock:
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 50000:
+            return file_path
+
+        tmp_path = file_path + ".part"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "X-API-Key": api_key,
+            "User-Agent": "KavyaMusic/1.0",
+        }
+
+        # Endpoints and formats to try in priority order
+        if download_type == "video":
+            candidates = [
+                ("/media/download", {"id": video_id, "type": "video", "format": "mp4"}),
+                ("/media/video", {"id": video_id, "quality": "720p"}),
+            ]
+        else:
+            candidates = [
+                ("/media/download", {"id": video_id, "format": "mp3"}),
+                ("/media/audio", {"id": video_id, "format": "mp3", "bitrate": "320"}),
+                ("/media/audio", {"id": video_id, "format": "m4a"}),
+            ]
+
+        timeout = aiohttp.ClientTimeout(total=600, connect=20)
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for ep_path, params in candidates:
+                try:
+                    url = f"{api_url}{ep_path}"
+                    async with session.get(url, params=params, timeout=timeout) as resp:
+                        if resp.status == 200:
+                            with open(tmp_path, "wb") as f:
+                                async for chunk in resp.content.iter_chunked(131072):
+                                    f.write(chunk)
+
+                            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 50000:
+                                os.replace(tmp_path, file_path)
+                                LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' from Beta API Hub ({ep_path})!")
+                                return file_path
+                        elif resp.status in (401, 403):
+                            LOGGER.error(f"🔴 Beta API auth error: HTTP {resp.status}")
+                            return None
+                        else:
+                            LOGGER.warning(f"🟡 Beta API {ep_path} returned HTTP {resp.status}")
+                except Exception as e:
+                    LOGGER.warning(f"Beta API download error on {ep_path}: {e}")
+                finally:
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.remove(tmp_path)
+                        except Exception:
+                            pass
+        return None
+
+
+async def beta_api_search(query: str, limit: int = 1):
+    """Search YouTube via Beta API Hub Gateway."""
+    if not BETA_API_URL or not BETA_API_KEY:
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {BETA_API_KEY}",
+            "X-API-Key": BETA_API_KEY,
+            "User-Agent": "KavyaMusic/1.0",
+        }
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                f"{BETA_API_URL}/media/search",
+                params={"query": query},
+                timeout=aiohttp.ClientTimeout(total=10, connect=5),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    results = data.get("results") or []
+                    return results[:limit]
+    except Exception as e:
+        LOGGER.warning(f"Beta API search error: {e}")
+    return None
+
+
+async def beta_api_info(video_id: str):
+    """Fetch video metadata via Beta API Hub Gateway."""
+    if not BETA_API_URL or not BETA_API_KEY:
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {BETA_API_KEY}",
+            "X-API-Key": BETA_API_KEY,
+            "User-Agent": "KavyaMusic/1.0",
+        }
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                f"{BETA_API_URL}/media/info",
+                params={"id": video_id},
+                timeout=aiohttp.ClientTimeout(total=10, connect=5),
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+    except Exception as e:
+        LOGGER.warning(f"Beta API info error: {e}")
+    return None
+
 
 async def external_api_download(api_url: str, api_key: str, video_id: str, download_type: str, title: str = None, api_name: str = "Shruti") -> str:
     if not api_url or not api_key:
@@ -177,6 +311,12 @@ async def _resolve_title(video_id: str, title: str = None):
             return res["result"][0]["title"]
     except Exception:
         pass
+    try:
+        info = await beta_api_info(video_id)
+        if info and info.get("metadata", {}).get("title"):
+            return info["metadata"]["title"]
+    except Exception:
+        pass
     return None
 
 
@@ -188,11 +328,22 @@ async def _download_media(link: str, title: str, kind: str):
 
     title = await _resolve_title(video_id, title)
 
+    # 1. Primary: Beta API Hub Gateway (Lily API Hub)
+    if BETA_API_URL and BETA_API_KEY:
+        try:
+            result = await beta_api_download(BETA_API_URL, BETA_API_KEY, video_id, kind, title)
+            if result:
+                return result
+        except Exception as e:
+            LOGGER.warning(f"Beta API Hub failed for {kind} '{title}': {e}")
+
+    # 2. Secondary: Shruti API
     result = await external_api_download(SHRUTI_API_URL, SHRUTI_API_KEY, video_id, kind, title, "Shruti")
     if result:
         return result
 
-    LOGGER.warning(f"🟡 Shruti API failed for {kind} '{title}'. Trying yt-dlp fallback...")
+    # 3. Fallback: yt-dlp
+    LOGGER.warning(f"🟡 External APIs failed for {kind} '{title}'. Trying yt-dlp fallback...")
     result = await ytdlp_download(video_id, kind, title)
     if result:
         LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' ({kind}) from yt-dlp fallback!")
@@ -257,6 +408,34 @@ class YouTubeAPI:
                     return title, duration_min, duration_sec, thumbnail, vidid
         except Exception:
             pass
+
+        # Beta API Hub resolver fallback
+        try:
+            vid_id = extract_video_id(link)
+            if vid_id and len(vid_id) >= 5 and ("youtube" in link or "youtu.be" in link or videoid):
+                info = await beta_api_info(vid_id)
+                if info and info.get("metadata"):
+                    title = info["metadata"].get("title")
+                    dur_sec = int(info.get("source", {}).get("duration_seconds") or 0)
+                    m, s = divmod(dur_sec, 60)
+                    h, m = divmod(m, 60)
+                    duration_min = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+                    thumbnail = f"https://img.youtube.com/vi/{vid_id}/hqdefault.jpg"
+                    if info.get("thumbnails"):
+                        thumbnail = info["thumbnails"][0].get("url") or thumbnail
+                    return title, duration_min, dur_sec, thumbnail, vid_id
+            else:
+                search_res = await beta_api_search(link, limit=1)
+                if search_res and len(search_res) > 0:
+                    r0 = search_res[0]
+                    title = r0.get("title")
+                    dur_sec = int(r0.get("duration_seconds") or 0)
+                    duration_min = r0.get("duration_string") or "0:00"
+                    thumbnail = r0.get("thumbnail") or f"https://img.youtube.com/vi/{r0.get('id')}/hqdefault.jpg"
+                    vidid = r0.get("id")
+                    return title, duration_min, dur_sec, thumbnail, vidid
+        except Exception as e:
+            LOGGER.warning(f"Beta API details fallback error: {e}")
 
         try:
             ydl_opts = {
@@ -362,6 +541,42 @@ class YouTubeAPI:
         except Exception:
             pass
 
+        # Beta API Hub resolver fallback
+        try:
+            vid_id = extract_video_id(link)
+            if vid_id and len(vid_id) >= 5 and ("youtube" in link or "youtu.be" in link or videoid):
+                info = await beta_api_info(vid_id)
+                if info and info.get("metadata"):
+                    title = info["metadata"].get("title")
+                    dur_sec = int(info.get("source", {}).get("duration_seconds") or 0)
+                    m, s = divmod(dur_sec, 60)
+                    h, m = divmod(m, 60)
+                    duration_min = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+                    thumbnail = f"https://img.youtube.com/vi/{vid_id}/hqdefault.jpg"
+                    if info.get("thumbnails"):
+                        thumbnail = info["thumbnails"][0].get("url") or thumbnail
+                    return {
+                        "title": title,
+                        "link": f"https://www.youtube.com/watch?v={vid_id}",
+                        "vidid": vid_id,
+                        "duration_min": duration_min,
+                        "thumb": thumbnail,
+                    }, vid_id
+            else:
+                search_res = await beta_api_search(link, limit=1)
+                if search_res and len(search_res) > 0:
+                    r0 = search_res[0]
+                    vidid = r0.get("id")
+                    return {
+                        "title": r0.get("title"),
+                        "link": f"https://www.youtube.com/watch?v={vidid}",
+                        "vidid": vidid,
+                        "duration_min": r0.get("duration_string") or "0:00",
+                        "thumb": r0.get("thumbnail") or f"https://img.youtube.com/vi/{vidid}/hqdefault.jpg",
+                    }, vidid
+        except Exception as e:
+            LOGGER.warning(f"Beta API track fallback error: {e}")
+
         try:
             ydl_opts = {
                 "quiet": True, 
@@ -441,6 +656,13 @@ class YouTubeAPI:
             result = (await a.next()).get("result")
             return result[query_type]["title"], result[query_type]["duration"], result[query_type]["thumbnails"][0]["url"].split("?")[0], result[query_type]["id"]
         except Exception:
+            try:
+                search_res = await beta_api_search(link, limit=10)
+                if search_res and len(search_res) > query_type:
+                    item = search_res[query_type]
+                    return item.get("title"), item.get("duration_string", "0:00"), item.get("thumbnail"), item.get("id")
+            except Exception:
+                pass
             fallback_thumb = f"https://img.youtube.com/vi/{raw_vid_str}/hqdefault.jpg" if raw_vid_str and len(raw_vid_str) > 5 else "https://telegra.ph/file/2e3d368e77c449c287430.jpg"
             return "Unknown Title", "0:00", fallback_thumb, "None"
 
