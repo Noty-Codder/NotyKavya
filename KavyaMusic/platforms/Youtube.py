@@ -109,9 +109,10 @@ async def beta_api_download(api_url: str, api_key: str, video_id: str, download_
         # Endpoints and formats to try in priority order
         if download_type == "video":
             candidates = [
+                ("/media/video", {"id": video_id, "quality": "720p", "format": "mp4"}),
+                ("/media/video", {"id": video_id, "quality": "360p", "format": "mp4"}),
+                ("/media/video", {"id": video_id, "quality": "best", "format": "mp4"}),
                 ("/media/download", {"id": video_id, "type": "video", "format": "mp4"}),
-                ("/media/video", {"id": video_id, "quality": "720p"}),
-                ("/media/download", {"id": video_id, "type": "video", "format": "mp4", "quality": "360p"}),
             ]
         else:
             candidates = [
@@ -122,13 +123,14 @@ async def beta_api_download(api_url: str, api_key: str, video_id: str, download_
                 ("/media/download", {"id": video_id, "format": "m4a"}),
             ]
 
-        timeout = aiohttp.ClientTimeout(total=600, connect=15)
+        # Use an active per-attempt timeout so stuck CDN connections fail fast to Shruti
+        attempt_timeout = aiohttp.ClientTimeout(total=45, connect=10) if download_type == "video" else aiohttp.ClientTimeout(total=600, connect=15)
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
             for ep_path, params in candidates:
                 try:
                     url = f"{api_url}{ep_path}"
-                    async with session.get(url, params=params, timeout=timeout) as resp:
+                    async with session.get(url, params=params, timeout=attempt_timeout) as resp:
                         if resp.status == 200:
                             with open(tmp_path, "wb") as f:
                                 async for chunk in resp.content.iter_chunked(131072):
@@ -138,6 +140,11 @@ async def beta_api_download(api_url: str, api_key: str, video_id: str, download_
                                 os.replace(tmp_path, file_path)
                                 LOGGER.info(f"🟢 SUCCESS: Downloaded '{title}' from Beta API Hub ({ep_path})!")
                                 return file_path
+                        elif resp.status in (502, 504):
+                            # Upstream YouTube CDN refused video stream on Beta API server.
+                            # Break candidate loop immediately to avoid lag before Shruti fallback.
+                            LOGGER.warning(f"🟡 Beta API {ep_path} returned HTTP {resp.status} (Upstream CDN blocked). Fast failover to Shruti API...")
+                            break
                         else:
                             LOGGER.warning(f"🟡 Beta API {ep_path} returned HTTP {resp.status} - trying next candidate...")
                 except Exception as e:
